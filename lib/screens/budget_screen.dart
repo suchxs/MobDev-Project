@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'dashboard_screen.dart';
 import 'expenses_screen.dart';
+import 'cards_screen.dart';
+import 'profile_screen.dart';
 
 class BudgetScreen extends StatelessWidget {
   const BudgetScreen({super.key});
@@ -20,6 +22,18 @@ class BudgetScreen extends StatelessWidget {
     void openExpenses() {
       Navigator.of(context).pushReplacement(
         MaterialPageRoute(builder: (_) => const ExpensesScreen()),
+      );
+    }
+
+    void openCards() {
+      Navigator.of(context).pushReplacement(
+        MaterialPageRoute(builder: (_) => const CardsScreen()),
+      );
+    }
+
+    void openProfile() {
+      Navigator.of(context).pushReplacement(
+        MaterialPageRoute(builder: (_) => const ProfileScreen()),
       );
     }
 
@@ -178,6 +192,12 @@ class BudgetScreen extends StatelessWidget {
           }
           if (index == 2) {
             openExpenses();
+          }
+          if (index == 1) {
+            openCards();
+          }
+          if (index == 3) {
+            openProfile();
           }
         },
         type: BottomNavigationBarType.fixed,

@@ -1,12 +1,101 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
+
 import 'budget_screen.dart';
+import 'cards_screen.dart';
 import 'category_detail_screen.dart';
 import 'dashboard_screen.dart';
+import 'profile_screen.dart';
 import 'spending_allocation_screen.dart';
 import 'spending_category_screen.dart';
+import '../services/session.dart';
 
-class ExpensesScreen extends StatelessWidget {
+class ExpensesScreen extends StatefulWidget {
   const ExpensesScreen({super.key});
+
+  @override
+  State<ExpensesScreen> createState() => _ExpensesScreenState();
+}
+
+class _ExpensesScreenState extends State<ExpensesScreen> {
+  static const String _apiBaseUrl = 'https://tipidtrack.dcism.org';
+
+  bool _isLoading = true;
+  double _totalExpenses = 0;
+  double _weekExpenses = 0;
+  double _monthExpenses = 0;
+  List<_ExpenseItem> _expenses = [];
+  List<_CategorySummary> _categories = [];
+
+  @override
+  void initState() {
+    super.initState();
+    _loadExpenses();
+  }
+
+  Future<void> _loadExpenses() async {
+    final token = AppSession.instance.token;
+    if (token == null || token.isEmpty) {
+      setState(() => _isLoading = false);
+      return;
+    }
+
+    try {
+      final response = await http.get(
+        Uri.parse('$_apiBaseUrl/api/transactions'),
+        headers: {
+          'Authorization': 'Bearer $token',
+          'Content-Type': 'application/json',
+        },
+      );
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body) as Map<String, dynamic>;
+        final rawItems = (data['transactions'] as List<dynamic>? ?? [])
+            .map((item) => _ExpenseItem.fromJson(item))
+            .where((item) => !item.isIncome)
+            .toList();
+
+        final total = rawItems.fold<double>(
+            0, (sum, item) => sum + item.amount);
+        final categoryMap = <String, double>{};
+        for (final item in rawItems) {
+          categoryMap.update(
+            item.category,
+            (value) => value + item.amount,
+            ifAbsent: () => item.amount,
+          );
+        }
+
+        final categories = categoryMap.entries
+            .map((entry) => _CategorySummary(
+                  name: entry.key,
+                  amount: entry.value,
+                  total: total,
+                ))
+            .toList()
+          ..sort((a, b) => b.amount.compareTo(a.amount));
+
+        if (!mounted) return;
+        setState(() {
+          _expenses = rawItems;
+          _totalExpenses = total;
+          _monthExpenses = total;
+          _weekExpenses = total * 0.3;
+          _categories = categories.take(4).toList();
+          _isLoading = false;
+        });
+      } else {
+        if (!mounted) return;
+        setState(() => _isLoading = false);
+      }
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _isLoading = false);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -20,9 +109,21 @@ class ExpensesScreen extends StatelessWidget {
       );
     }
 
+    void openCards() {
+      Navigator.of(context).pushReplacement(
+        MaterialPageRoute(builder: (_) => const CardsScreen()),
+      );
+    }
+
     void openBudget() {
       Navigator.of(context).pushReplacement(
         MaterialPageRoute(builder: (_) => const BudgetScreen()),
+      );
+    }
+
+    void openProfile() {
+      Navigator.of(context).pushReplacement(
+        MaterialPageRoute(builder: (_) => const ProfileScreen()),
       );
     }
 
@@ -88,19 +189,25 @@ class ExpensesScreen extends StatelessWidget {
                     ),
                   ),
                   const SizedBox(height: 6),
-                  const Text(
-                    'Php 6,240.00',
-                    style: TextStyle(
+                  Text(
+                    'Php ${_totalExpenses.toStringAsFixed(2)}',
+                    style: const TextStyle(
                       fontSize: 24,
                       fontWeight: FontWeight.w700,
                     ),
                   ),
                   const SizedBox(height: 12),
                   Row(
-                    children: const [
-                      _SummaryChip(label: 'This week', value: 'Php 1,420'),
-                      SizedBox(width: 10),
-                      _SummaryChip(label: 'This month', value: 'Php 4,820'),
+                    children: [
+                      _SummaryChip(
+                        label: 'This week',
+                        value: 'Php ${_weekExpenses.toStringAsFixed(2)}',
+                      ),
+                      const SizedBox(width: 10),
+                      _SummaryChip(
+                        label: 'This month',
+                        value: 'Php ${_monthExpenses.toStringAsFixed(2)}',
+                      ),
                     ],
                   ),
                 ],
@@ -142,30 +249,26 @@ class ExpensesScreen extends StatelessWidget {
               ),
             ),
             const SizedBox(height: 12),
-            const _CategoryTile(
-              title: 'Food',
-              amount: 'Php 1,450',
-              percent: '28%',
-              color: Color(0xFFF8B26A),
-            ),
-            const _CategoryTile(
-              title: 'Transport',
-              amount: 'Php 980',
-              percent: '19%',
-              color: Color(0xFF7FB3FF),
-            ),
-            const _CategoryTile(
-              title: 'Shopping',
-              amount: 'Php 1,230',
-              percent: '24%',
-              color: Color(0xFFB38AF7),
-            ),
-            const _CategoryTile(
-              title: 'Bills',
-              amount: 'Php 1,140',
-              percent: '22%',
-              color: Color(0xFF7AD7AA),
-            ),
+            if (_isLoading)
+              const Padding(
+                padding: EdgeInsets.symmetric(vertical: 8),
+                child: Center(child: CircularProgressIndicator()),
+              )
+            else if (_categories.isEmpty)
+              Text(
+                'No categories yet.',
+                style: TextStyle(
+                  color: Colors.black.withValues(alpha: 0.6),
+                ),
+              )
+            else
+              for (final category in _categories)
+                _CategoryTile(
+                  title: category.name,
+                  amount: 'Php ${category.amount.toStringAsFixed(2)}',
+                  percent: category.percentLabel,
+                  color: category.color,
+                ),
             const SizedBox(height: 18),
             const Text(
               'Recent expenses',
@@ -175,27 +278,27 @@ class ExpensesScreen extends StatelessWidget {
               ),
             ),
             const SizedBox(height: 12),
-            const _ExpenseTile(
-              title: 'Lunch',
-              subtitle: 'Cafe',
-              amount: '- Php 180.00',
-              icon: Icons.restaurant_rounded,
-              iconColor: Color(0xFFF8B26A),
-            ),
-            const _ExpenseTile(
-              title: 'Jeep fare',
-              subtitle: 'Commute',
-              amount: '- Php 40.00',
-              icon: Icons.directions_bus_rounded,
-              iconColor: Color(0xFF7FB3FF),
-            ),
-            const _ExpenseTile(
-              title: 'Online order',
-              subtitle: 'Shopping',
-              amount: '- Php 320.00',
-              icon: Icons.shopping_bag_rounded,
-              iconColor: Color(0xFFB38AF7),
-            ),
+            if (_isLoading)
+              const Padding(
+                padding: EdgeInsets.symmetric(vertical: 8),
+                child: Center(child: CircularProgressIndicator()),
+              )
+            else if (_expenses.isEmpty)
+              Text(
+                'No expenses yet.',
+                style: TextStyle(
+                  color: Colors.black.withValues(alpha: 0.6),
+                ),
+              )
+            else
+              for (final expense in _expenses.take(6))
+                _ExpenseTile(
+                  title: expense.title,
+                  subtitle: expense.category,
+                  amount: expense.formattedAmount,
+                  icon: expense.icon,
+                  iconColor: expense.iconColor,
+                ),
           ],
         ),
       ),
@@ -206,7 +309,10 @@ class ExpensesScreen extends StatelessWidget {
             openDashboard();
           }
           if (index == 1) {
-            openBudget();
+            openCards();
+          }
+          if (index == 3) {
+            openProfile();
           }
         },
         type: BottomNavigationBarType.fixed,
@@ -232,6 +338,99 @@ class ExpensesScreen extends StatelessWidget {
         ],
       ),
     );
+  }
+}
+
+class _ExpenseItem {
+  _ExpenseItem({
+    required this.title,
+    required this.category,
+    required this.amount,
+    required this.isIncome,
+  });
+
+  final String title;
+  final String category;
+  final double amount;
+  final bool isIncome;
+
+  String get formattedAmount {
+    return '- Php ${amount.toStringAsFixed(2)}';
+  }
+
+  IconData get icon {
+    switch (category.toLowerCase()) {
+      case 'food':
+        return Icons.restaurant_rounded;
+      case 'transportation':
+      case 'transport':
+        return Icons.directions_bus_rounded;
+      case 'shopping':
+        return Icons.shopping_bag_rounded;
+      case 'bills':
+        return Icons.receipt_rounded;
+      default:
+        return Icons.receipt_long_rounded;
+    }
+  }
+
+  Color get iconColor {
+    switch (category.toLowerCase()) {
+      case 'food':
+        return const Color(0xFFF8B26A);
+      case 'transportation':
+      case 'transport':
+        return const Color(0xFF7FB3FF);
+      case 'shopping':
+        return const Color(0xFFB38AF7);
+      case 'bills':
+        return const Color(0xFF7AD7AA);
+      default:
+        return const Color(0xFF7E7A8E);
+    }
+  }
+
+  factory _ExpenseItem.fromJson(Map<String, dynamic> json) {
+    return _ExpenseItem(
+      title: json['title'] as String? ?? 'Expense',
+      category: json['category'] as String? ?? 'General',
+      amount: (json['amount'] as num?)?.toDouble() ?? 0.0,
+      isIncome: (json['type'] as String?)?.toLowerCase() == 'income',
+    );
+  }
+}
+
+class _CategorySummary {
+  _CategorySummary({
+    required this.name,
+    required this.amount,
+    required this.total,
+  });
+
+  final String name;
+  final double amount;
+  final double total;
+
+  String get percentLabel {
+    if (total <= 0) return '0%';
+    final percent = (amount / total) * 100;
+    return '${percent.toStringAsFixed(0)}%';
+  }
+
+  Color get color {
+    switch (name.toLowerCase()) {
+      case 'food':
+        return const Color(0xFFF8B26A);
+      case 'transportation':
+      case 'transport':
+        return const Color(0xFF7FB3FF);
+      case 'shopping':
+        return const Color(0xFFB38AF7);
+      case 'bills':
+        return const Color(0xFF7AD7AA);
+      default:
+        return const Color(0xFF7E7A8E);
+    }
   }
 }
 

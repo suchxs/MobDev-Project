@@ -4,6 +4,8 @@ import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 
 import 'dashboard_screen.dart';
+import 'reset_password_screen.dart';
+import '../services/session.dart';
 
 class AuthScreen extends StatefulWidget {
   const AuthScreen({super.key, this.showLogin = false});
@@ -136,6 +138,12 @@ class _AuthScreenState extends State<AuthScreen> with TickerProviderStateMixin {
       );
 
       if (response.statusCode == 200) {
+        final data = jsonDecode(response.body) as Map<String, dynamic>;
+        AppSession.instance.token = data['token'] as String?;
+        AppSession.instance.fullName =
+            data['fullName'] as String? ?? data['name'] as String?;
+        AppSession.instance.email = email;
+        AppSession.instance.showGuideAfterLogin = true;
         _showMessage('Login successful.', success: true);
         if (!mounted) return;
         Navigator.of(context).pushReplacement(
@@ -400,7 +408,13 @@ class _AuthForm extends StatelessWidget {
               Align(
                 alignment: Alignment.centerRight,
                 child: TextButton(
-                  onPressed: () {},
+                  onPressed: () {
+                    Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (_) => const ResetPasswordScreen(),
+                      ),
+                    );
+                  },
                   child: Text(
                     'Forgot password?',
                     style: TextStyle(

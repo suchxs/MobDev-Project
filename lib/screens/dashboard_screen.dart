@@ -1,15 +1,141 @@
-import 'package:flutter/material.dart';
-import 'budget_screen.dart';
-import 'expenses_screen.dart';
+import 'dart:convert';
 
-class DashboardScreen extends StatelessWidget {
+import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
+import 'package:shared_preferences/shared_preferences.dart';
+
+import 'budget_screen.dart';
+import 'cards_screen.dart';
+import 'expenses_screen.dart';
+import 'profile_screen.dart';
+import '../services/session.dart';
+
+class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key});
+
+  @override
+  State<DashboardScreen> createState() => _DashboardScreenState();
+}
+
+class _DashboardScreenState extends State<DashboardScreen> {
+  static const String _apiBaseUrl = 'https://tipidtrack.dcism.org';
+  static const String _guideFlagKey = 'hasSeenGuide';
+
+  bool _isLoading = true;
+  bool _isBalanceLoading = true;
+  double _balanceTotal = 0;
+  List<_TransactionItem> _transactions = [];
+  bool _showGuide = false;
+  int _guideStep = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadTransactions();
+    _loadBalance();
+    _loadGuideStatus();
+  }
+
+  Future<void> _loadGuideStatus() async {
+    if (!AppSession.instance.showGuideAfterLogin) return;
+    final prefs = await SharedPreferences.getInstance();
+    final hasSeen = prefs.getBool(_guideFlagKey) ?? false;
+    if (!mounted) return;
+    if (!hasSeen) {
+      setState(() {
+        _showGuide = true;
+        _guideStep = 0;
+      });
+    }
+    AppSession.instance.showGuideAfterLogin = false;
+  }
+
+  Future<void> _completeGuide() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_guideFlagKey, true);
+    if (!mounted) return;
+    setState(() {
+      _showGuide = false;
+      _guideStep = 0;
+    });
+  }
+
+  Future<void> _loadBalance() async {
+    final token = AppSession.instance.token;
+    if (token == null || token.isEmpty) {
+      setState(() => _isBalanceLoading = false);
+      return;
+    }
+
+    try {
+      final response = await http.get(
+        Uri.parse('$_apiBaseUrl/api/balance'),
+        headers: {
+          'Authorization': 'Bearer $token',
+          'Content-Type': 'application/json',
+        },
+      );
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body) as Map<String, dynamic>;
+        final total = (data['total'] as num?)?.toDouble() ?? 0.0;
+        if (!mounted) return;
+        setState(() {
+          _balanceTotal = total;
+          _isBalanceLoading = false;
+        });
+      } else {
+        if (!mounted) return;
+        setState(() => _isBalanceLoading = false);
+      }
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _isBalanceLoading = false);
+    }
+  }
+
+  Future<void> _loadTransactions() async {
+    final token = AppSession.instance.token;
+    if (token == null || token.isEmpty) {
+      setState(() => _isLoading = false);
+      return;
+    }
+
+    try {
+      final response = await http.get(
+        Uri.parse('$_apiBaseUrl/api/transactions'),
+        headers: {
+          'Authorization': 'Bearer $token',
+          'Content-Type': 'application/json',
+        },
+      );
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body) as Map<String, dynamic>;
+        final items = (data['transactions'] as List<dynamic>? ?? [])
+            .map((item) => _TransactionItem.fromJson(item))
+            .toList();
+        if (!mounted) return;
+        setState(() {
+          _transactions = items;
+          _isLoading = false;
+        });
+      } else {
+        if (!mounted) return;
+        setState(() => _isLoading = false);
+      }
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _isLoading = false);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
     const brandColor = Color(0xFF8C6AE6);
     const surfaceColor = Color(0xFFF6F3FB);
     const mutedText = Color(0xFF7E7A8E);
+    final displayName = AppSession.instance.fullName ?? 'there';
 
     void openExpenses() {
       Navigator.of(context).push(
@@ -23,14 +149,28 @@ class DashboardScreen extends StatelessWidget {
       );
     }
 
+    void openCards() {
+      Navigator.of(context).push(
+        MaterialPageRoute(builder: (_) => const CardsScreen()),
+      );
+    }
+
+    void openProfile() {
+      Navigator.of(context).push(
+        MaterialPageRoute(builder: (_) => const ProfileScreen()),
+      );
+    }
+
     return Scaffold(
       backgroundColor: surfaceColor,
       body: SafeArea(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.fromLTRB(20, 10, 20, 110),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
+        child: Stack(
+          children: [
+            SingleChildScrollView(
+              padding: const EdgeInsets.fromLTRB(20, 10, 20, 110),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
               Row(
                 children: [
                   const CircleAvatar(
@@ -41,16 +181,16 @@ class DashboardScreen extends StatelessWidget {
                   const SizedBox(width: 12),
                   Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
-                    children: const [
+                    children: [
                       Text(
-                        'Good Morning, Joseph!',
-                        style: TextStyle(
+                        'Good Morning, $displayName!',
+                        style: const TextStyle(
                           fontSize: 16,
                           fontWeight: FontWeight.w700,
                         ),
                       ),
-                      SizedBox(height: 2),
-                      Text(
+                      const SizedBox(height: 2),
+                      const Text(
                         'Have a good day!',
                         style: TextStyle(
                           fontSize: 12,
@@ -109,17 +249,19 @@ class DashboardScreen extends StatelessWidget {
                     const SizedBox(height: 6),
                     Row(
                       crossAxisAlignment: CrossAxisAlignment.end,
-                      children: const [
+                      children: [
                         Text(
-                          '18,987.67',
-                          style: TextStyle(
+                          _isBalanceLoading
+                              ? '—'
+                              : _balanceTotal.toStringAsFixed(2),
+                          style: const TextStyle(
                             color: Colors.white,
                             fontSize: 28,
                             fontWeight: FontWeight.w700,
                           ),
                         ),
-                        SizedBox(width: 6),
-                        Padding(
+                        const SizedBox(width: 6),
+                        const Padding(
                           padding: EdgeInsets.only(bottom: 3),
                           child: Text(
                             'PHP',
@@ -243,39 +385,58 @@ class DashboardScreen extends StatelessWidget {
                 ],
               ),
               const SizedBox(height: 8),
-              const _TransactionTile(
-                title: 'Random Stuff',
-                subtitle: 'Shopping',
-                amount: '- Php 67.00',
-                icon: Icons.shopping_bag_rounded,
-                iconColor: Color(0xFF7E7A8E),
+              if (_isLoading)
+                const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 12),
+                  child: Center(
+                    child: CircularProgressIndicator(),
+                  ),
+                )
+              else if (_transactions.isEmpty)
+                Text(
+                  'No transactions yet. Add your first entry.',
+                  style: TextStyle(
+                    color: Colors.black.withValues(alpha: 0.6),
+                  ),
+                )
+              else
+                for (final transaction in _transactions)
+                  _TransactionTile(
+                    title: transaction.title,
+                    subtitle: transaction.category,
+                    amount: transaction.formattedAmount,
+                    icon: transaction.icon,
+                    iconColor: transaction.iconColor,
+                  ),
+                ],
               ),
-              const _TransactionTile(
-                title: 'Gcash Cash-In',
-                subtitle: 'Wallet',
-                amount: '+ Php 50.00',
-                icon: Icons.account_balance_wallet_rounded,
-                iconColor: Color(0xFF7AD7AA),
+            ),
+            if (_showGuide)
+              _GuideOverlay(
+                step: _guideStep,
+                onNext: () {
+                  if (_guideStep >= 2) {
+                    _completeGuide();
+                  } else {
+                    setState(() => _guideStep += 1);
+                  }
+                },
+                onSkip: _completeGuide,
               ),
-              const _TransactionTile(
-                title: 'Food',
-                subtitle: 'Cafe',
-                amount: '- Php 120.00',
-                icon: Icons.restaurant_rounded,
-                iconColor: Color(0xFFF8B26A),
-              ),
-            ],
-          ),
+          ],
         ),
       ),
       bottomNavigationBar: BottomNavigationBar(
         currentIndex: 0,
         onTap: (index) {
           if (index == 1) {
-            openBudget();
+            openCards();
           }
           if (index == 2) {
             openExpenses();
+          }
+          if (index == 3) {
+            openProfile();
           }
         },
         type: BottomNavigationBarType.fixed,
@@ -408,6 +569,182 @@ class _TransactionTile extends StatelessWidget {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _TransactionItem {
+  _TransactionItem({
+    required this.title,
+    required this.category,
+    required this.amount,
+    required this.isIncome,
+  });
+
+  final String title;
+  final String category;
+  final double amount;
+  final bool isIncome;
+
+  String get formattedAmount {
+    final prefix = isIncome ? '+' : '-';
+    return '$prefix Php ${amount.toStringAsFixed(2)}';
+  }
+
+  IconData get icon {
+    switch (category.toLowerCase()) {
+      case 'food':
+        return Icons.restaurant_rounded;
+      case 'transportation':
+      case 'transport':
+        return Icons.directions_bus_rounded;
+      case 'shopping':
+        return Icons.shopping_bag_rounded;
+      case 'wallet':
+        return Icons.account_balance_wallet_rounded;
+      default:
+        return Icons.receipt_long_rounded;
+    }
+  }
+
+  Color get iconColor {
+    switch (category.toLowerCase()) {
+      case 'food':
+        return const Color(0xFFF8B26A);
+      case 'transportation':
+      case 'transport':
+        return const Color(0xFF7FB3FF);
+      case 'shopping':
+        return const Color(0xFFB38AF7);
+      case 'wallet':
+        return const Color(0xFF7AD7AA);
+      default:
+        return const Color(0xFF7E7A8E);
+    }
+  }
+
+  factory _TransactionItem.fromJson(Map<String, dynamic> json) {
+    return _TransactionItem(
+      title: json['title'] as String? ?? 'Transaction',
+      category: json['category'] as String? ?? 'General',
+      amount: (json['amount'] as num?)?.toDouble() ?? 0.0,
+      isIncome: (json['type'] as String?)?.toLowerCase() == 'income',
+    );
+  }
+}
+
+
+class _GuideOverlay extends StatelessWidget {
+  const _GuideOverlay({
+    required this.step,
+    required this.onNext,
+    required this.onSkip,
+  });
+
+  final int step;
+  final VoidCallback onNext;
+  final VoidCallback onSkip;
+
+  @override
+  Widget build(BuildContext context) {
+    final size = MediaQuery.of(context).size;
+
+    String title;
+    String message;
+    Alignment bubbleAlignment;
+    Offset bubbleOffset;
+
+    switch (step) {
+      case 0:
+        title = 'Balance card';
+        message = 'See your total balance at a glance.';
+        bubbleAlignment = Alignment.topCenter;
+        bubbleOffset = const Offset(0, 140);
+        break;
+      case 1:
+        title = 'Quick actions';
+        message = 'Add expense, income, or open budget tools here.';
+        bubbleAlignment = Alignment.topCenter;
+        bubbleOffset = const Offset(0, 320);
+        break;
+      default:
+        title = 'Navigation';
+        message = 'Switch between Home, Cards, and Expenses.';
+        bubbleAlignment = Alignment.bottomCenter;
+        bubbleOffset = const Offset(0, -120);
+        break;
+    }
+
+    return Positioned.fill(
+      child: Material(
+        color: Colors.black.withValues(alpha: 0.55),
+        child: Stack(
+          children: [
+            Positioned(
+              top: 12,
+              right: 12,
+              child: TextButton(
+                onPressed: onSkip,
+                child: const Text(
+                  'Skip',
+                  style: TextStyle(color: Colors.white),
+                ),
+              ),
+            ),
+            Align(
+              alignment: bubbleAlignment,
+              child: Transform.translate(
+                offset: bubbleOffset,
+                child: Container(
+                  width: size.width * 0.78,
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(16),
+                  ),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        title,
+                        style: const TextStyle(
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        message,
+                        style: TextStyle(
+                          color: Colors.black.withValues(alpha: 0.7),
+                          fontSize: 12,
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      Align(
+                        alignment: Alignment.centerRight,
+                        child: ElevatedButton(
+                          onPressed: onNext,
+                          style: ElevatedButton.styleFrom(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 16,
+                              vertical: 8,
+                            ),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                          ),
+                          child: Text(step >= 2 ? 'Done' : 'Next'),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

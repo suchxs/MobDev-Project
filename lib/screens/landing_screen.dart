@@ -46,6 +46,7 @@ class _LandingScreenState extends State<LandingScreen> {
 	Widget build(BuildContext context) {
 		const brandColor = Color(0xFFB38AF7);
 
+
 		void openAuth({required bool showLogin}) {
 			Navigator.of(context).push(
 				MaterialPageRoute(
@@ -77,7 +78,7 @@ class _LandingScreenState extends State<LandingScreen> {
 							Align(
 								alignment: Alignment.centerRight,
 								child: TextButton(
-									onPressed: () => openAuth(showLogin: false),
+									onPressed: () => openAuth(showLogin: true),
 									child: Text(
 										'Skip',
 										style: TextStyle(
@@ -172,7 +173,8 @@ class _LandingScreenState extends State<LandingScreen> {
 										fontWeight: FontWeight.w600,
 									),
 								),
-								child: Text(_index == _pages.length - 1 ? 'Get Started' : 'Next'),
+								child:
+										Text(_index == _pages.length - 1 ? 'Get Started' : 'Next'),
 							),
 							const SizedBox(height: 12),
 							OutlinedButton(

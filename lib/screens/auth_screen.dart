@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'dashboard_screen.dart';
 import 'reset_password_screen.dart';
@@ -30,6 +31,7 @@ class _AuthScreenState extends State<AuthScreen> with TickerProviderStateMixin {
 
   bool _isSigningUp = false;
   bool _isLoggingIn = false;
+  bool _pendingGuide = false; // preloaded from prefs
 
   @override
   void initState() {
@@ -39,6 +41,21 @@ class _AuthScreenState extends State<AuthScreen> with TickerProviderStateMixin {
       vsync: this,
       initialIndex: widget.showLogin ? 1 : 0,
     );
+    _loadPendingGuide();
+  }
+
+  Future<void> _loadPendingGuide() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      if (mounted) setState(() => _pendingGuide = prefs.getBool('pendingGuide') == true);
+    } catch (_) {}
+  }
+
+  void _clearPendingGuide() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove('pendingGuide');
+    } catch (_) {}
   }
 
   @override
@@ -96,6 +113,8 @@ class _AuthScreenState extends State<AuthScreen> with TickerProviderStateMixin {
       );
 
       if (response.statusCode == 200) {
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setBool('pendingGuide', true);
         _showMessage('Account created. Please log in.', success: true);
         _signupPasswordController.clear();
         _tabController.animateTo(1);
@@ -143,7 +162,13 @@ class _AuthScreenState extends State<AuthScreen> with TickerProviderStateMixin {
         AppSession.instance.fullName =
             data['fullName'] as String? ?? data['name'] as String?;
         AppSession.instance.email = email;
-        AppSession.instance.showGuideAfterLogin = true;
+
+        // Use cached flag — no async prefs call in critical path
+        if (_pendingGuide) {
+          AppSession.instance.showGuideAfterLogin = true;
+          _clearPendingGuide(); // fire-and-forget
+        }
+
         _showMessage('Login successful.', success: true);
         if (!mounted) return;
         Navigator.of(context).pushReplacement(
@@ -152,7 +177,7 @@ class _AuthScreenState extends State<AuthScreen> with TickerProviderStateMixin {
       } else {
         _showMessage('Invalid credentials.');
       }
-    } catch (_) {
+    } catch (e) {
       _showMessage('Unable to connect. Please try again.');
     } finally {
       if (mounted) {

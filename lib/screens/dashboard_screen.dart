@@ -27,6 +27,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   double _monthlyBudget = 0;
   double _totalSpent = 0;
   List<TxItem> _transactions = [];
+  List<_BalanceSource> _balanceSources = [];
   bool _showGuide = false;
   int _guideStep = 0;
 
@@ -65,26 +66,40 @@ class _DashboardScreenState extends State<DashboardScreen> {
     }
 
     try {
-      final response = await http.get(
-        Uri.parse('$_apiBaseUrl/api/balance'),
-        headers: {
-          'Authorization': 'Bearer $token',
-          'Content-Type': 'application/json',
-        },
-      );
+      final results = await Future.wait([
+        http.get(Uri.parse('$_apiBaseUrl/api/balance'),
+            headers: {'Authorization': 'Bearer $token', 'Content-Type': 'application/json'}),
+        http.get(Uri.parse('$_apiBaseUrl/api/balance/breakdown'),
+            headers: {'Authorization': 'Bearer $token', 'Content-Type': 'application/json'}),
+      ]);
 
-      if (response.statusCode == 200) {
-        final data = jsonDecode(response.body) as Map<String, dynamic>;
-        final total = (data['total'] as num?)?.toDouble() ?? 0.0;
-        if (!mounted) return;
-        setState(() {
-          _balanceTotal = total;
-          _isBalanceLoading = false;
-        });
-      } else {
-        if (!mounted) return;
-        setState(() => _isBalanceLoading = false);
+      if (!mounted) return;
+      final totalRes = results[0];
+      final breakdownRes = results[1];
+
+      double total = 0;
+      List<_BalanceSource> sources = [];
+
+      if (totalRes.statusCode == 200) {
+        final data = jsonDecode(totalRes.body) as Map<String, dynamic>;
+        total = (data['total'] as num?)?.toDouble() ?? 0.0;
       }
+      if (breakdownRes.statusCode == 200) {
+        final data = jsonDecode(breakdownRes.body) as Map<String, dynamic>;
+        sources = (data['sources'] as List<dynamic>? ?? [])
+            .map((s) => _BalanceSource(
+                  name: s['name'] as String,
+                  amount: (s['amount'] as num).toDouble(),
+                  type: s['type'] as String,
+                ))
+            .toList();
+      }
+
+      setState(() {
+        _balanceTotal = total;
+        _balanceSources = sources;
+        _isBalanceLoading = false;
+      });
     } catch (_) {
       if (!mounted) return;
       setState(() => _isBalanceLoading = false);
@@ -508,6 +523,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   ],
                 ),
               ),
+              const SizedBox(height: 12),
+              // Balance source breakdown bar
+              if (!_isBalanceLoading && _balanceSources.isNotEmpty)
+                _BalanceBreakdownBar(sources: _balanceSources),
               const SizedBox(height: 18),
               // Budget card: shows progress if set, tip if not
               if (_isBudgetLoading)
@@ -1673,6 +1692,188 @@ class _AlertRow extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+// ─── Balance breakdown data model ─────────────────────────────────────────────
+
+class _BalanceSource {
+  const _BalanceSource({
+    required this.name,
+    required this.amount,
+    required this.type,
+  });
+  final String name;
+  final double amount;
+  final String type; // 'debit', 'cash', 'credit_debt', etc.
+}
+
+// ─── Balance breakdown bar widget ─────────────────────────────────────────────
+
+class _BalanceBreakdownBar extends StatelessWidget {
+  const _BalanceBreakdownBar({required this.sources});
+
+  final List<_BalanceSource> sources;
+
+  static const List<Color> _palette = [
+    Color(0xFF8C6AE6),
+    Color(0xFF7FB3FF),
+    Color(0xFFF8B26A),
+    Color(0xFF7AD7AA),
+    Color(0xFFB38AF7),
+    Color(0xFF62CFD6),
+    Color(0xFFFFD36E),
+    Color(0xFFF4A0A0),
+  ];
+
+  static const Color _debtColor = Color(0xFFE45D5D);
+
+  @override
+  Widget build(BuildContext context) {
+    // Assign stable colors: positive sources get palette colors, debts get red
+    int paletteIdx = 0;
+    final colored = sources.map((s) {
+      final color = s.type == 'credit_debt'
+          ? _debtColor
+          : _palette[paletteIdx++ % _palette.length];
+      return (source: s, color: color);
+    }).toList();
+
+    final positive = colored.where((e) => e.source.amount > 0).toList();
+    final total = positive.fold(0.0, (sum, e) => sum + e.source.amount);
+
+    if (total <= 0 && !sources.any((s) => s.type == 'credit_debt')) {
+      return const SizedBox.shrink();
+    }
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(20),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.04),
+            blurRadius: 10,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'Balance breakdown',
+            style: TextStyle(
+              fontWeight: FontWeight.w700,
+              fontSize: 13,
+              color: Color(0xFF2D2D3A),
+            ),
+          ),
+          const SizedBox(height: 10),
+          // Segmented bar — use LayoutBuilder so each segment fills exact % of width
+          if (total > 0)
+            LayoutBuilder(
+              builder: (context, constraints) {
+                final barWidth = constraints.maxWidth;
+                return ClipRRect(
+                  borderRadius: BorderRadius.circular(8),
+                  child: SizedBox(
+                    height: 12,
+                    width: barWidth,
+                    child: Row(
+                      children: [
+                        for (final entry in positive)
+                          SizedBox(
+                            width: (entry.source.amount / total) * barWidth,
+                            height: 12,
+                            child: ColoredBox(color: entry.color),
+                          ),
+                      ],
+                    ),
+                  ),
+                );
+              },
+            ),
+          if (total > 0) const SizedBox(height: 12),
+          // Legend
+          Wrap(
+            spacing: 12,
+            runSpacing: 8,
+            children: [
+              for (final entry in colored)
+                _LegendChip(
+                  label: entry.source.name,
+                  amount: entry.source.amount,
+                  color: entry.color,
+                  pct: (total > 0 && entry.source.amount > 0)
+                      ? (entry.source.amount / total * 100)
+                      : null,
+                  isDebt: entry.source.type == 'credit_debt',
+                ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _LegendChip extends StatelessWidget {
+  const _LegendChip({
+    required this.label,
+    required this.amount,
+    required this.color,
+    this.pct,
+    this.isDebt = false,
+  });
+
+  final String label;
+  final double amount;
+  final Color color;
+  final double? pct;
+  final bool isDebt;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          width: 10,
+          height: 10,
+          decoration: BoxDecoration(
+            color: color,
+            borderRadius: BorderRadius.circular(3),
+          ),
+        ),
+        const SizedBox(width: 6),
+        Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              label,
+              style: const TextStyle(
+                fontSize: 11,
+                fontWeight: FontWeight.w600,
+                color: Color(0xFF2D2D3A),
+              ),
+            ),
+            Text(
+              isDebt
+                  ? '−Php ${amount.abs().toStringAsFixed(0)}'
+                  : pct != null
+                      ? '${pct!.toStringAsFixed(0)}% · Php ${amount.toStringAsFixed(0)}'
+                      : 'Php ${amount.toStringAsFixed(0)}',
+              style: TextStyle(
+                fontSize: 10,
+                color: isDebt ? const Color(0xFFE45D5D) : const Color(0xFF7E7A8E),
+              ),
+            ),
+          ],
+        ),
+      ],
     );
   }
 }

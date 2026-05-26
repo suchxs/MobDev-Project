@@ -145,7 +145,6 @@ app.post("/api/transactions", authenticate, async (req, res) => {
   try {
     const { title, type, source_card_id, source_name } = req.body;
     const amount = parseFloat(req.body.amount);
-    // category required for expenses, optional for income
     const category = req.body.category || (type === "income" ? "Income" : null);
 
     if (!title || !category || isNaN(amount) || amount <= 0 || !type)
@@ -157,7 +156,6 @@ app.post("/api/transactions", authenticate, async (req, res) => {
 
     const conn = await mysql.createConnection(dbConfig);
 
-    // Validate card ownership if source provided
     if (source_card_id) {
       const [cards] = await conn.execute(
         "SELECT id, card_type FROM cards WHERE id = ? AND user_id = ?",
@@ -167,12 +165,16 @@ app.post("/api/transactions", authenticate, async (req, res) => {
         await conn.end();
         return res.status(403).json({ message: "Card not found" });
       }
-      const cardType = cards[0].card_type;
-      // Block income from credit cards
-      if (type === "income" && cardType === "credit") {
+      if (type === "income" && cards[0].card_type === "credit") {
         await conn.end();
         return res.status(400).json({ message: "Cannot add income to a credit card" });
       }
+      // Update card balance: income increases it, expense decreases it
+      const delta = type === "income" ? amount : -amount;
+      await conn.execute(
+        "UPDATE cards SET balance = balance + ? WHERE id = ? AND user_id = ?",
+        [delta, source_card_id, req.user.userId]
+      );
     }
 
     await conn.execute(
@@ -195,9 +197,9 @@ app.put("/api/transactions/:id", authenticate, async (req, res) => {
     const txId = parseInt(req.params.id, 10);
     const conn = await mysql.createConnection(dbConfig);
 
-    // Verify ownership
+    // Fetch old transaction to reverse its card balance effect
     const [rows] = await conn.execute(
-      "SELECT id, type FROM transactions WHERE id = ? AND user_id = ?",
+      "SELECT id, type, amount, source_card_id FROM transactions WHERE id = ? AND user_id = ?",
       [txId, req.user.userId]
     );
     if (rows.length === 0) {
@@ -205,7 +207,9 @@ app.put("/api/transactions/:id", authenticate, async (req, res) => {
       return res.status(404).json({ message: "Transaction not found" });
     }
 
-    const txType = rows[0].type;
+    const old = rows[0];
+    const txType = old.type;
+    const oldAmount = parseFloat(old.amount);
     const { title, source_card_id, source_name } = req.body;
     const amount = parseFloat(req.body.amount);
     const category = req.body.category || (txType === "income" ? "Income" : null);
@@ -215,7 +219,6 @@ app.put("/api/transactions/:id", authenticate, async (req, res) => {
     if (amount > 9999999.99)
       return res.status(400).json({ message: "Amount too large" });
 
-    // Validate card ownership if provided
     if (source_card_id) {
       const [cards] = await conn.execute(
         "SELECT id, card_type FROM cards WHERE id = ? AND user_id = ?",
@@ -229,6 +232,23 @@ app.put("/api/transactions/:id", authenticate, async (req, res) => {
         await conn.end();
         return res.status(400).json({ message: "Cannot set income source to a credit card" });
       }
+    }
+
+    // Reverse old card balance effect
+    if (old.source_card_id) {
+      const oldDelta = txType === "income" ? -oldAmount : oldAmount;
+      await conn.execute(
+        "UPDATE cards SET balance = balance + ? WHERE id = ? AND user_id = ?",
+        [oldDelta, old.source_card_id, req.user.userId]
+      );
+    }
+    // Apply new card balance effect
+    if (source_card_id) {
+      const newDelta = txType === "income" ? amount : -amount;
+      await conn.execute(
+        "UPDATE cards SET balance = balance + ? WHERE id = ? AND user_id = ?",
+        [newDelta, source_card_id, req.user.userId]
+      );
     }
 
     await conn.execute(
@@ -250,13 +270,31 @@ app.delete("/api/transactions/:id", authenticate, async (req, res) => {
   try {
     const txId = parseInt(req.params.id, 10);
     const conn = await mysql.createConnection(dbConfig);
-    const [result] = await conn.execute(
+
+    // Fetch transaction to reverse card balance effect
+    const [rows] = await conn.execute(
+      "SELECT id, type, amount, source_card_id FROM transactions WHERE id = ? AND user_id = ?",
+      [txId, req.user.userId]
+    );
+    if (rows.length === 0) {
+      await conn.end();
+      return res.status(404).json({ message: "Transaction not found" });
+    }
+
+    const tx = rows[0];
+    if (tx.source_card_id) {
+      const delta = tx.type === "income" ? -parseFloat(tx.amount) : parseFloat(tx.amount);
+      await conn.execute(
+        "UPDATE cards SET balance = balance + ? WHERE id = ? AND user_id = ?",
+        [delta, tx.source_card_id, req.user.userId]
+      );
+    }
+
+    await conn.execute(
       "DELETE FROM transactions WHERE id = ? AND user_id = ?",
       [txId, req.user.userId]
     );
     await conn.end();
-    if (result.affectedRows === 0)
-      return res.status(404).json({ message: "Transaction not found" });
     res.json({ message: "Transaction deleted" });
   } catch (err) {
     console.error(err);
@@ -264,25 +302,86 @@ app.delete("/api/transactions/:id", authenticate, async (req, res) => {
   }
 });
 
-// Balance = income - expense from transactions, minus all credit card debt
+// Balance = sum of non-credit card/account balances - credit debt + net cash-only transactions
 app.get("/api/balance", authenticate, async (req, res) => {
   try {
     const conn = await mysql.createConnection(dbConfig);
-    const [[txRow]] = await conn.execute(
-      `SELECT
-         COALESCE(SUM(CASE WHEN type = 'income'  THEN amount ELSE 0 END), 0) -
-         COALESCE(SUM(CASE WHEN type = 'expense' THEN amount ELSE 0 END), 0) AS tx_balance
-       FROM transactions WHERE user_id = ?`,
+
+    // Sum balances of debit/cash cards (transactions touching these update their balance directly)
+    const [[cardRow]] = await conn.execute(
+      `SELECT COALESCE(SUM(balance), 0) AS card_balance
+       FROM cards WHERE user_id = ? AND card_type != 'credit'`,
       [req.user.userId]
     );
+
+    // Credit card debt reduces total balance
     const [[creditRow]] = await conn.execute(
       `SELECT COALESCE(SUM(debt_amount), 0) AS total_debt
        FROM cards WHERE user_id = ? AND card_type = 'credit'`,
       [req.user.userId]
     );
+
+    // Cash-only transactions (no source_card_id) contribute directly
+    const [[cashRow]] = await conn.execute(
+      `SELECT
+         COALESCE(SUM(CASE WHEN type = 'income'  THEN amount ELSE 0 END), 0) -
+         COALESCE(SUM(CASE WHEN type = 'expense' THEN amount ELSE 0 END), 0) AS cash_balance
+       FROM transactions WHERE user_id = ? AND source_card_id IS NULL`,
+      [req.user.userId]
+    );
+
     await conn.end();
-    const total = parseFloat(txRow.tx_balance) - parseFloat(creditRow.total_debt);
+    const total =
+      parseFloat(cardRow.card_balance) +
+      parseFloat(cashRow.cash_balance) -
+      parseFloat(creditRow.total_debt);
     res.json({ total });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "Server error" });
+  }
+});
+
+// Breakdown of balance by source (for segmented bar on home page)
+app.get("/api/balance/breakdown", authenticate, async (req, res) => {
+  try {
+    const conn = await mysql.createConnection(dbConfig);
+
+    // Each debit/cash card balance
+    const [cards] = await conn.execute(
+      `SELECT card_name, card_type, balance FROM cards
+       WHERE user_id = ? AND card_type != 'credit' ORDER BY balance DESC`,
+      [req.user.userId]
+    );
+
+    // Credit debt (shown as negative)
+    const [creditCards] = await conn.execute(
+      `SELECT card_name, debt_amount FROM cards
+       WHERE user_id = ? AND card_type = 'credit' AND debt_amount > 0`,
+      [req.user.userId]
+    );
+
+    // Cash transactions (no source card)
+    const [[cashRow]] = await conn.execute(
+      `SELECT
+         COALESCE(SUM(CASE WHEN type = 'income'  THEN amount ELSE 0 END), 0) -
+         COALESCE(SUM(CASE WHEN type = 'expense' THEN amount ELSE 0 END), 0) AS cash_balance
+       FROM transactions WHERE user_id = ? AND source_card_id IS NULL`,
+      [req.user.userId]
+    );
+    await conn.end();
+
+    const sources = [];
+    for (const c of cards) {
+      sources.push({ name: c.card_name, amount: parseFloat(c.balance), type: c.card_type });
+    }
+    const cash = parseFloat(cashRow.cash_balance);
+    if (cash !== 0) sources.push({ name: "Cash", amount: cash, type: "cash" });
+    for (const c of creditCards) {
+      sources.push({ name: c.card_name, amount: -parseFloat(c.debt_amount), type: "credit_debt" });
+    }
+
+    res.json({ sources });
   } catch (err) {
     console.error(err);
     res.status(500).json({ message: "Server error" });

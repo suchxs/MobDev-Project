@@ -18,130 +18,275 @@ class ProfileScreen extends StatefulWidget {
 class _ProfileScreenState extends State<ProfileScreen> {
   static const String _apiBaseUrl = 'https://tipidtrack.dcism.org';
   static const String _guideFlagKey = 'hasSeenGuide';
+  static const brandColor = Color(0xFF8C6AE6);
+  static const surfaceColor = Color(0xFFF6F3FB);
 
-  final GlobalKey<FormState> _nameFormKey = GlobalKey<FormState>();
-  final GlobalKey<FormState> _passwordFormKey = GlobalKey<FormState>();
-  final TextEditingController _nameController = TextEditingController();
-  final TextEditingController _passwordController = TextEditingController();
-  final TextEditingController _confirmController = TextEditingController();
-
-  bool _isSavingName = false;
-  bool _isSavingPassword = false;
   bool _isDeleting = false;
-
-  @override
-  void initState() {
-    super.initState();
-    _nameController.text = AppSession.instance.fullName ?? '';
-  }
-
-  @override
-  void dispose() {
-    _nameController.dispose();
-    _passwordController.dispose();
-    _confirmController.dispose();
-    super.dispose();
-  }
+  bool _isResetting = false;
 
   void _showMessage(String message, {bool success = false}) {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(message),
-        backgroundColor: success ? const Color(0xFF4CAF81) : null,
+        backgroundColor:
+            success ? const Color(0xFF4CAF81) : const Color(0xFFE45D5D),
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        margin: const EdgeInsets.fromLTRB(16, 0, 16, 16),
       ),
     );
   }
 
-  Future<void> _saveName() async {
-    if (!(_nameFormKey.currentState?.validate() ?? false)) return;
-    final token = AppSession.instance.token;
-    if (token == null || token.isEmpty) return;
-
-    final newName = _nameController.text.trim();
-    if (newName.isEmpty) {
-      _showMessage('Name cannot be empty.');
-      return;
-    }
-
-    setState(() => _isSavingName = true);
-    try {
-      final response = await http.post(
-        Uri.parse('$_apiBaseUrl/api/profile/name'),
-        headers: {
-          'Authorization': 'Bearer $token',
-          'Content-Type': 'application/json',
-        },
-        body: jsonEncode({'fullName': newName}),
+  InputDecoration _inputDeco(String label) => InputDecoration(
+        labelText: label,
+        filled: true,
+        fillColor: const Color(0xFFF3F0FA),
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(14),
+          borderSide: BorderSide.none,
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(14),
+          borderSide: const BorderSide(color: brandColor, width: 1.5),
+        ),
       );
 
-      if (response.statusCode == 200) {
-        AppSession.instance.fullName = newName;
-        _showMessage('Name updated.', success: true);
-        if (mounted) {
-          setState(() {});
-        }
-      } else {
-        _showMessage('Update failed. Try again.');
-      }
-    } catch (_) {
-      _showMessage('Unable to connect.');
-    } finally {
-      if (mounted) setState(() => _isSavingName = false);
-    }
+  void _showEditNameSheet() {
+    final controller =
+        TextEditingController(text: AppSession.instance.fullName ?? '');
+    bool isSaving = false;
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setSS) => Padding(
+          padding:
+              EdgeInsets.only(bottom: MediaQuery.of(ctx).viewInsets.bottom),
+          child: _BottomSheet(
+            title: 'Edit Name',
+            icon: Icons.person_rounded,
+            child: Column(
+              children: [
+                TextField(
+                    controller: controller,
+                    autofocus: true,
+                    decoration: _inputDeco('Full Name')),
+                const SizedBox(height: 16),
+                _SheetButton(
+                  label: 'Save',
+                  isBusy: isSaving,
+                  onPressed: () async {
+                    final name = controller.text.trim();
+                    if (name.isEmpty) return;
+                    setSS(() => isSaving = true);
+                    try {
+                      final token = AppSession.instance.token ?? '';
+                      final res = await http.post(
+                        Uri.parse('$_apiBaseUrl/api/profile/name'),
+                        headers: {
+                          'Authorization': 'Bearer $token',
+                          'Content-Type': 'application/json',
+                        },
+                        body: jsonEncode({'fullName': name}),
+                      );
+                      if (res.statusCode == 200) {
+                        AppSession.instance.fullName = name;
+                        if (ctx.mounted) Navigator.of(ctx).pop();
+                        if (mounted) setState(() {});
+                        _showMessage('Name updated.', success: true);
+                      } else {
+                        setSS(() => isSaving = false);
+                        _showMessage('Update failed. Try again.');
+                      }
+                    } catch (_) {
+                      setSS(() => isSaving = false);
+                      _showMessage('Unable to connect.');
+                    }
+                  },
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
   }
 
-  Future<void> _savePassword() async {
-    if (!(_passwordFormKey.currentState?.validate() ?? false)) return;
-    final token = AppSession.instance.token;
-    if (token == null || token.isEmpty) return;
+  void _showEditPasswordSheet() {
+    final pwController = TextEditingController();
+    final confirmController = TextEditingController();
+    bool isSaving = false;
 
-    final password = _passwordController.text;
-    if (password.length < 6) {
-      _showMessage('Password must be at least 6 characters.');
-      return;
-    }
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setSS) => Padding(
+          padding:
+              EdgeInsets.only(bottom: MediaQuery.of(ctx).viewInsets.bottom),
+          child: _BottomSheet(
+            title: 'Change Password',
+            icon: Icons.lock_rounded,
+            child: Column(
+              children: [
+                TextField(
+                    controller: pwController,
+                    autofocus: true,
+                    obscureText: true,
+                    decoration: _inputDeco('New Password')),
+                const SizedBox(height: 12),
+                TextField(
+                    controller: confirmController,
+                    obscureText: true,
+                    decoration: _inputDeco('Confirm Password')),
+                const SizedBox(height: 16),
+                _SheetButton(
+                  label: 'Update Password',
+                  isBusy: isSaving,
+                  onPressed: () async {
+                    final pw = pwController.text;
+                    if (pw.length < 6) {
+                      _showMessage('Password must be at least 6 characters.');
+                      return;
+                    }
+                    if (pw != confirmController.text) {
+                      _showMessage('Passwords do not match.');
+                      return;
+                    }
+                    setSS(() => isSaving = true);
+                    try {
+                      final token = AppSession.instance.token ?? '';
+                      final res = await http.post(
+                        Uri.parse('$_apiBaseUrl/api/profile/password'),
+                        headers: {
+                          'Authorization': 'Bearer $token',
+                          'Content-Type': 'application/json',
+                        },
+                        body: jsonEncode({'newPassword': pw}),
+                      );
+                      if (res.statusCode == 200) {
+                        if (ctx.mounted) Navigator.of(ctx).pop();
+                        _showMessage('Password updated.', success: true);
+                      } else {
+                        setSS(() => isSaving = false);
+                        _showMessage('Update failed. Try again.');
+                      }
+                    } catch (_) {
+                      setSS(() => isSaving = false);
+                      _showMessage('Unable to connect.');
+                    }
+                  },
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 
-    setState(() => _isSavingPassword = true);
+  Future<void> _resetGuide() async {
     try {
-      final response = await http.post(
-        Uri.parse('$_apiBaseUrl/api/profile/password'),
-        headers: {
-          'Authorization': 'Bearer $token',
-          'Content-Type': 'application/json',
-        },
-        body: jsonEncode({'newPassword': password}),
-      );
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool(_guideFlagKey, false);
+    } catch (_) {}
+    AppSession.instance.showGuideAfterLogin = true;
+    if (!mounted) return;
+    Navigator.of(context).pushReplacement(
+      MaterialPageRoute(builder: (_) => const DashboardScreen()),
+    );
+  }
 
-      if (response.statusCode == 200) {
-        _passwordController.clear();
-        _confirmController.clear();
-        _showMessage('Password updated.', success: true);
+  Future<void> _logout() async {
+    AppSession.instance.clear();
+    if (!mounted) return;
+    Navigator.of(context).pushAndRemoveUntil(
+      MaterialPageRoute(builder: (_) => const AuthScreen(showLogin: true)),
+      (_) => false,
+    );
+  }
+
+  Future<void> _resetData() async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: const Text('Reset financial data?',
+            style: TextStyle(fontWeight: FontWeight.w700)),
+        content: const Text(
+          'This will delete all your transactions and budget data.\n\n'
+          'Your account (email & password) will remain intact.',
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.of(ctx).pop(false),
+              child: const Text('Cancel')),
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            style:
+                TextButton.styleFrom(foregroundColor: const Color(0xFFE45D5D)),
+            child: const Text('Reset'),
+          ),
+        ],
+      ),
+    );
+    if (confirm != true) return;
+
+    setState(() => _isResetting = true);
+    try {
+      final token = AppSession.instance.token ?? '';
+      final res = await http.delete(
+        Uri.parse('$_apiBaseUrl/api/data/reset'),
+        headers: {'Authorization': 'Bearer $token'},
+      );
+      if (res.statusCode == 200) {
+        _showMessage('Financial data reset successfully.', success: true);
       } else {
-        _showMessage('Update failed. Try again.');
+        _showMessage('Reset failed. Try again.');
       }
     } catch (_) {
       _showMessage('Unable to connect.');
     } finally {
-      if (mounted) setState(() => _isSavingPassword = false);
+      if (mounted) setState(() => _isResetting = false);
     }
   }
 
   Future<void> _deleteAccount() async {
-    final token = AppSession.instance.token;
-    if (token == null || token.isEmpty) return;
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: const Text('Delete account?',
+            style: TextStyle(fontWeight: FontWeight.w700)),
+        content: const Text(
+            'This will permanently delete your account and all data. This cannot be undone.'),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.of(ctx).pop(false),
+              child: const Text('Cancel')),
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            style:
+                TextButton.styleFrom(foregroundColor: const Color(0xFFE45D5D)),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (confirm != true) return;
 
     setState(() => _isDeleting = true);
     try {
-      final response = await http.delete(
+      final token = AppSession.instance.token ?? '';
+      final res = await http.delete(
         Uri.parse('$_apiBaseUrl/api/profile'),
-        headers: {
-          'Authorization': 'Bearer $token',
-          'Content-Type': 'application/json',
-        },
+        headers: {'Authorization': 'Bearer $token'},
       );
-
-      if (response.statusCode == 200) {
+      if (res.statusCode == 200) {
         AppSession.instance.clear();
         if (!mounted) return;
         Navigator.of(context).pushAndRemoveUntil(
@@ -149,7 +294,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
           (_) => false,
         );
       } else {
-        _showMessage('Delete failed.');
+        _showMessage('Delete failed. Try again.');
       }
     } catch (_) {
       _showMessage('Unable to connect.');
@@ -158,329 +303,198 @@ class _ProfileScreenState extends State<ProfileScreen> {
     }
   }
 
-  Future<void> _resetGuide() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool(_guideFlagKey, false);
-    AppSession.instance.showGuideAfterLogin = true;
-    if (!mounted) return;
-    Navigator.of(context).pushReplacement(
-      MaterialPageRoute(builder: (_) => const DashboardScreen()),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
-    const brandColor = Color(0xFF8C6AE6);
-    const surfaceColor = Color(0xFFF6F3FB);
-    const mutedText = Color(0xFF7E7A8E);
+    final name = AppSession.instance.fullName ?? 'User';
+    final email = AppSession.instance.email ?? '';
+    final initials = name.trim().isNotEmpty
+        ? name.trim().split(' ').map((w) => w[0]).take(2).join().toUpperCase()
+        : '?';
 
     return Scaffold(
       backgroundColor: surfaceColor,
-      appBar: AppBar(
-        backgroundColor: surfaceColor,
-        elevation: 0,
-        title: const Text(
-          'Profile',
-          style: TextStyle(fontWeight: FontWeight.w600),
-        ),
-        centerTitle: true,
-      ),
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.fromLTRB(20, 10, 20, 24),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-              Container(
-                padding: const EdgeInsets.all(16),
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(18),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withValues(alpha: 0.05),
-                      blurRadius: 12,
-                      offset: const Offset(0, 6),
-                    ),
-                  ],
+      body: CustomScrollView(
+        slivers: [
+          // Purple gradient header
+          SliverToBoxAdapter(
+            child: Container(
+              decoration: const BoxDecoration(
+                gradient: LinearGradient(
+                  colors: [Color(0xFF8C6AE6), Color(0xFFAB8FF0)],
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
                 ),
-                child: Row(
-                  children: [
-                    const CircleAvatar(
-                      radius: 26,
-                      backgroundColor: Color(0xFFE8E2F6),
-                      child: Icon(Icons.person_outline, color: brandColor),
-                    ),
-                    const SizedBox(width: 14),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
+                borderRadius:
+                    BorderRadius.vertical(bottom: Radius.circular(32)),
+              ),
+              child: SafeArea(
+                bottom: false,
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(8, 8, 8, 32),
+                  child: Column(
+                    children: [
+                      Row(
                         children: [
-                          Text(
-                            _nameController.text.isEmpty
-                                ? 'Your account'
-                                : _nameController.text,
-                            style: const TextStyle(
+                          IconButton(
+                            onPressed: () => Navigator.of(context).pop(),
+                            icon: const Icon(Icons.arrow_back_rounded,
+                                color: Colors.white),
+                          ),
+                          const Spacer(),
+                          const Text(
+                            'Profile',
+                            style: TextStyle(
+                              color: Colors.white,
                               fontWeight: FontWeight.w700,
-                              fontSize: 16,
+                              fontSize: 17,
                             ),
                           ),
-                          const SizedBox(height: 4),
-                          Text(
-                            AppSession.instance.email ?? 'Signed in',
-                            style: const TextStyle(
-                              color: mutedText,
-                              fontSize: 12,
-                            ),
-                          ),
+                          const Spacer(),
+                          const SizedBox(width: 48),
                         ],
                       ),
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 18),
-              const Text(
-                'Account',
-                style: TextStyle(fontWeight: FontWeight.w700),
-              ),
-              const SizedBox(height: 10),
-              _SectionCard(
-                child: Form(
-                  key: _nameFormKey,
-                  child: Column(
-                    children: [
-                      TextFormField(
-                        controller: _nameController,
-                        decoration: InputDecoration(
-                          labelText: 'Full Name',
-                          filled: true,
-                          fillColor: const Color(0xFFF7F5FB),
-                          border: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(14),
-                            borderSide: BorderSide.none,
+                      const SizedBox(height: 12),
+                      Container(
+                        width: 78,
+                        height: 78,
+                        decoration: BoxDecoration(
+                          color: Colors.white.withValues(alpha: 0.22),
+                          shape: BoxShape.circle,
+                          border: Border.all(
+                            color: Colors.white.withValues(alpha: 0.5),
+                            width: 2.5,
                           ),
                         ),
-                        validator: (value) {
-                          if (value == null || value.trim().isEmpty) {
-                            return 'Full name is required.';
-                          }
-                          return null;
-                        },
+                        alignment: Alignment.center,
+                        child: Text(
+                          initials,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 26,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
                       ),
                       const SizedBox(height: 12),
-                      SizedBox(
-                        width: double.infinity,
-                        child: ElevatedButton(
-                          onPressed: _isSavingName ? null : _saveName,
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: brandColor,
-                            foregroundColor: Colors.white,
-                            padding: const EdgeInsets.symmetric(vertical: 14),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(14),
-                            ),
-                          ),
-                          child: _isSavingName
-                              ? const SizedBox(
-                                  height: 18,
-                                  width: 18,
-                                  child: CircularProgressIndicator(
-                                    strokeWidth: 2,
-                                    valueColor: AlwaysStoppedAnimation<Color>(
-                                      Colors.white,
-                                    ),
-                                  ),
-                                )
-                              : const Text('Save Name'),
+                      Text(
+                        name,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 20,
+                          fontWeight: FontWeight.w700,
                         ),
                       ),
+                      const SizedBox(height: 4),
+                      if (email.isNotEmpty)
+                        Text(
+                          email,
+                          style: TextStyle(
+                            color: Colors.white.withValues(alpha: 0.8),
+                            fontSize: 13,
+                          ),
+                        ),
                     ],
                   ),
                 ),
               ),
-              const SizedBox(height: 18),
-              const Text(
-                'Password',
-                style: TextStyle(fontWeight: FontWeight.w700),
-              ),
-              const SizedBox(height: 10),
-              _SectionCard(
-                child: Form(
-                  key: _passwordFormKey,
-                  child: Column(
-                    children: [
-                      TextFormField(
-                        controller: _passwordController,
-                        obscureText: true,
-                        decoration: InputDecoration(
-                          labelText: 'New Password',
-                          filled: true,
-                          fillColor: const Color(0xFFF7F5FB),
-                          border: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(14),
-                            borderSide: BorderSide.none,
-                          ),
-                        ),
-                        validator: (value) {
-                          if (value == null || value.isEmpty) {
-                            return 'Password is required.';
-                          }
-                          if (value.length < 6) {
-                            return 'Password must be at least 6 characters.';
-                          }
-                          return null;
-                        },
-                      ),
-                      const SizedBox(height: 12),
-                      TextFormField(
-                        controller: _confirmController,
-                        obscureText: true,
-                        decoration: InputDecoration(
-                          labelText: 'Confirm Password',
-                          filled: true,
-                          fillColor: const Color(0xFFF7F5FB),
-                          border: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(14),
-                            borderSide: BorderSide.none,
-                          ),
-                        ),
-                        validator: (value) {
-                          if (value == null || value.isEmpty) {
-                            return 'Confirm your password.';
-                          }
-                          if (value != _passwordController.text) {
-                            return 'Passwords do not match.';
-                          }
-                          return null;
-                        },
-                      ),
-                      const SizedBox(height: 12),
-                      SizedBox(
-                        width: double.infinity,
-                        child: ElevatedButton(
-                          onPressed: _isSavingPassword ? null : _savePassword,
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: brandColor,
-                            foregroundColor: Colors.white,
-                            padding: const EdgeInsets.symmetric(vertical: 14),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(14),
-                            ),
-                          ),
-                          child: _isSavingPassword
-                              ? const SizedBox(
-                                  height: 18,
-                                  width: 18,
-                                  child: CircularProgressIndicator(
-                                    strokeWidth: 2,
-                                    valueColor:
-                                        AlwaysStoppedAnimation<Color>(
-                                      Colors.white,
-                                    ),
-                                  ),
-                                )
-                              : const Text('Update Password'),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-              const SizedBox(height: 18),
-              const Text(
-                'Guide',
-                style: TextStyle(fontWeight: FontWeight.w700),
-              ),
-              const SizedBox(height: 10),
-              _SectionCard(
-                child: OutlinedButton(
-                  onPressed: _resetGuide,
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: brandColor,
-                    padding: const EdgeInsets.symmetric(vertical: 14),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(14),
-                    ),
-                  ),
-                  child: const Text('Show quick guide again'),
-                ),
-              ),
-              const SizedBox(height: 18),
-              const Text(
-                'Danger Zone',
-                style: TextStyle(fontWeight: FontWeight.w700),
-              ),
-              const SizedBox(height: 10),
-              _SectionCard(
-                child: OutlinedButton(
-                  onPressed: _isDeleting
-                      ? null
-                      : () async {
-                          final confirm = await showDialog<bool>(
-                            context: context,
-                            builder: (context) => AlertDialog(
-                              title: const Text('Delete account?'),
-                              content: const Text(
-                                'This will permanently delete your data.',
-                              ),
-                              actions: [
-                                TextButton(
-                                  onPressed: () =>
-                                      Navigator.of(context).pop(false),
-                                  child: const Text('Cancel'),
-                                ),
-                                TextButton(
-                                  onPressed: () =>
-                                      Navigator.of(context).pop(true),
-                                  child: const Text('Delete'),
-                                ),
-                              ],
-                            ),
-                          );
-                          if (confirm == true) {
-                            _deleteAccount();
-                          }
-                        },
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: const Color(0xFFE45D5D),
-                    padding: const EdgeInsets.symmetric(vertical: 14),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(14),
-                    ),
-                    side: const BorderSide(color: Color(0xFFE45D5D)),
-                  ),
-                  child: _isDeleting
-                      ? const SizedBox(
-                          height: 18,
-                          width: 18,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            valueColor: AlwaysStoppedAnimation<Color>(
-                              Color(0xFFE45D5D),
-                            ),
-                          ),
-                        )
-                      : const Text('Delete Account'),
-                ),
-              ),
-              const SizedBox(height: 12),
-            ],
+            ),
           ),
-        ),
+
+          // Settings list
+          SliverPadding(
+            padding: const EdgeInsets.fromLTRB(20, 24, 20, 40),
+            sliver: SliverList(
+              delegate: SliverChildListDelegate([
+                const _SectionLabel('Account'),
+                const SizedBox(height: 8),
+                _SettingsCard(children: [
+                  _SettingsTile(
+                    icon: Icons.person_rounded,
+                    label: 'Edit Name',
+                    onTap: _showEditNameSheet,
+                  ),
+                  const _TileDivider(),
+                  _SettingsTile(
+                    icon: Icons.lock_rounded,
+                    label: 'Change Password',
+                    onTap: _showEditPasswordSheet,
+                  ),
+                ]),
+                const SizedBox(height: 20),
+                const _SectionLabel('General'),
+                const SizedBox(height: 8),
+                _SettingsCard(children: [
+                  _SettingsTile(
+                    icon: Icons.menu_book_rounded,
+                    label: 'Show Quick Guide',
+                    onTap: _resetGuide,
+                  ),
+                ]),
+                const SizedBox(height: 20),
+                const _SectionLabel('Session'),
+                const SizedBox(height: 8),
+                _SettingsCard(children: [
+                  _SettingsTile(
+                    icon: Icons.logout_rounded,
+                    label: 'Log Out',
+                    color: brandColor,
+                    onTap: _logout,
+                  ),
+                ]),
+                const SizedBox(height: 20),
+                const _SectionLabel('Danger Zone'),
+                const SizedBox(height: 8),
+                _SettingsCard(children: [
+                  _SettingsTile(
+                    icon: Icons.restart_alt_rounded,
+                    label: _isResetting ? 'Resetting...' : 'Reset Data',
+                    sublabel: 'Clear all transactions & budget',
+                    color: const Color(0xFFE45D5D),
+                    onTap: _isResetting ? null : _resetData,
+                  ),
+                  const Divider(height: 1, indent: 52),
+                  _SettingsTile(
+                    icon: Icons.delete_forever_rounded,
+                    label: _isDeleting ? 'Deleting...' : 'Delete Account',
+                    sublabel: 'Permanently remove your account',
+                    color: const Color(0xFFE45D5D),
+                    onTap: _isDeleting ? null : _deleteAccount,
+                  ),
+                ]),
+              ]),
+            ),
+          ),
+        ],
       ),
     );
   }
 }
 
-class _SectionCard extends StatelessWidget {
-  const _SectionCard({required this.child});
+class _SectionLabel extends StatelessWidget {
+  const _SectionLabel(this.text);
+  final String text;
 
-  final Widget child;
+  @override
+  Widget build(BuildContext context) {
+    return Text(
+      text.toUpperCase(),
+      style: const TextStyle(
+        fontSize: 11,
+        fontWeight: FontWeight.w600,
+        color: Color(0xFF9E9AB0),
+        letterSpacing: 0.8,
+      ),
+    );
+  }
+}
+
+class _SettingsCard extends StatelessWidget {
+  const _SettingsCard({required this.children});
+  final List<Widget> children;
 
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(18),
@@ -488,11 +502,203 @@ class _SectionCard extends StatelessWidget {
           BoxShadow(
             color: Colors.black.withValues(alpha: 0.05),
             blurRadius: 12,
-            offset: const Offset(0, 6),
+            offset: const Offset(0, 4),
           ),
         ],
       ),
-      child: child,
+      child: Column(children: children),
+    );
+  }
+}
+
+class _SettingsTile extends StatelessWidget {
+  const _SettingsTile({
+    required this.icon,
+    required this.label,
+    this.sublabel,
+    this.color,
+    this.onTap,
+  });
+
+  final IconData icon;
+  final String label;
+  final String? sublabel;
+  final Color? color;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final tileColor = color ?? const Color(0xFF2D2D3A);
+
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(18),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+        child: Row(
+          children: [
+            Container(
+              width: 36,
+              height: 36,
+              decoration: BoxDecoration(
+                color: tileColor.withValues(alpha: 0.1),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Icon(icon, color: tileColor, size: 18),
+            ),
+            const SizedBox(width: 14),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    label,
+                    style: TextStyle(
+                      fontWeight: FontWeight.w500,
+                      fontSize: 15,
+                      color: tileColor,
+                    ),
+                  ),
+                  if (sublabel != null) ...[
+                    const SizedBox(height: 2),
+                    Text(
+                      sublabel!,
+                      style: const TextStyle(
+                        fontSize: 12,
+                        color: Color(0xFF7E7A8E),
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+            if (onTap != null)
+              const Icon(Icons.chevron_right_rounded,
+                  color: Color(0xFFB0A9C2), size: 20),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _TileDivider extends StatelessWidget {
+  const _TileDivider();
+
+  @override
+  Widget build(BuildContext context) {
+    return const Divider(
+      height: 1,
+      indent: 66,
+      endIndent: 0,
+      color: Color(0xFFF0EDF8),
+    );
+  }
+}
+
+class _BottomSheet extends StatelessWidget {
+  const _BottomSheet({
+    required this.title,
+    required this.icon,
+    required this.child,
+  });
+
+  final String title;
+  final IconData icon;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(24, 20, 24, 32),
+      decoration: const BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Center(
+            child: Container(
+              width: 36,
+              height: 4,
+              decoration: BoxDecoration(
+                color: const Color(0xFFE0DCF0),
+                borderRadius: BorderRadius.circular(4),
+              ),
+            ),
+          ),
+          const SizedBox(height: 20),
+          Row(
+            children: [
+              Container(
+                width: 36,
+                height: 36,
+                decoration: BoxDecoration(
+                  color: const Color(0xFFEFE9FB),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Icon(icon, color: const Color(0xFF8C6AE6), size: 18),
+              ),
+              const SizedBox(width: 12),
+              Text(
+                title,
+                style: const TextStyle(
+                  fontSize: 17,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 20),
+          child,
+        ],
+      ),
+    );
+  }
+}
+
+class _SheetButton extends StatelessWidget {
+  const _SheetButton({
+    required this.label,
+    required this.isBusy,
+    required this.onPressed,
+  });
+
+  final String label;
+  final bool isBusy;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: double.infinity,
+      child: ElevatedButton(
+        onPressed: isBusy ? null : onPressed,
+        style: ElevatedButton.styleFrom(
+          backgroundColor: const Color(0xFF8C6AE6),
+          foregroundColor: Colors.white,
+          padding: const EdgeInsets.symmetric(vertical: 15),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(14),
+          ),
+          textStyle: const TextStyle(
+            fontWeight: FontWeight.w600,
+            fontSize: 15,
+          ),
+        ),
+        child: isBusy
+            ? const SizedBox(
+                height: 18,
+                width: 18,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  color: Colors.white,
+                ),
+              )
+            : Text(label),
+      ),
     );
   }
 }

@@ -2,8 +2,17 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'screens/splash_screen.dart';
 
-void main() {
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
   runApp(const TipidTrackApp());
+}
+
+class _NoStretchScrollBehavior extends ScrollBehavior {
+  @override
+  Widget buildOverscrollIndicator(
+      BuildContext context, Widget child, ScrollableDetails details) {
+    return child; // removes stretch + glow overscroll effect
+  }
 }
 
 class TipidTrackApp extends StatelessWidget {
@@ -16,6 +25,7 @@ class TipidTrackApp extends StatelessWidget {
     return MaterialApp(
       title: 'TipidTrack',
       debugShowCheckedModeBanner: false,
+      scrollBehavior: _NoStretchScrollBehavior(),
       theme: ThemeData(
         useMaterial3: true,
         colorScheme: ColorScheme.fromSeed(

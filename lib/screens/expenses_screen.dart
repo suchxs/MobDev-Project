@@ -3,7 +3,6 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 
-import 'budget_screen.dart';
 import 'cards_screen.dart';
 import 'category_detail_screen.dart';
 import 'dashboard_screen.dart';
@@ -35,6 +34,8 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
     _loadExpenses();
   }
 
+  double _creditMonthlyTotal = 0;
+
   Future<void> _loadExpenses() async {
     final token = AppSession.instance.token;
     if (token == null || token.isEmpty) {
@@ -43,16 +44,18 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
     }
 
     try {
-      final response = await http.get(
-        Uri.parse('$_apiBaseUrl/api/transactions'),
-        headers: {
-          'Authorization': 'Bearer $token',
-          'Content-Type': 'application/json',
-        },
-      );
+      final headers = {
+        'Authorization': 'Bearer $token',
+        'Content-Type': 'application/json',
+      };
+      final results = await Future.wait([
+        http.get(Uri.parse('$_apiBaseUrl/api/transactions'), headers: headers),
+        http.get(Uri.parse('$_apiBaseUrl/api/expenses/summary'), headers: headers),
+        http.get(Uri.parse('$_apiBaseUrl/api/cards'), headers: headers),
+      ]);
 
-      if (response.statusCode == 200) {
-        final data = jsonDecode(response.body) as Map<String, dynamic>;
+      if (results[0].statusCode == 200) {
+        final data = jsonDecode(results[0].body) as Map<String, dynamic>;
         final rawItems = (data['transactions'] as List<dynamic>? ?? [])
             .map((item) => _ExpenseItem.fromJson(item))
             .where((item) => !item.isIncome)
@@ -78,6 +81,18 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
             .toList()
           ..sort((a, b) => b.amount.compareTo(a.amount));
 
+        double creditMonthly = 0;
+        if (results[2].statusCode == 200) {
+          final cardData = jsonDecode(results[2].body) as Map<String, dynamic>;
+          final cards = cardData['cards'] as List<dynamic>? ?? [];
+          for (final c in cards) {
+            if ((c['card_type'] as String?) == 'credit') {
+              creditMonthly +=
+                  double.tryParse(c['monthly_charge'].toString()) ?? 0;
+            }
+          }
+        }
+
         if (!mounted) return;
         setState(() {
           _expenses = rawItems;
@@ -85,6 +100,7 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
           _monthExpenses = total;
           _weekExpenses = total * 0.3;
           _categories = categories.take(4).toList();
+          _creditMonthlyTotal = creditMonthly;
           _isLoading = false;
         });
       } else {
@@ -112,12 +128,6 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
     void openCards() {
       Navigator.of(context).pushReplacement(
         MaterialPageRoute(builder: (_) => const CardsScreen()),
-      );
-    }
-
-    void openBudget() {
-      Navigator.of(context).pushReplacement(
-        MaterialPageRoute(builder: (_) => const BudgetScreen()),
       );
     }
 
@@ -210,6 +220,34 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
                       ),
                     ],
                   ),
+                  if (_creditMonthlyTotal > 0) ...[
+                    const SizedBox(height: 12),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 12, vertical: 10),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFFFF3E0),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Row(
+                        children: [
+                          const Icon(Icons.credit_score_rounded,
+                              color: Color(0xFFF09D3A), size: 16),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              'Credit monthly charges: Php ${_creditMonthlyTotal.toStringAsFixed(2)}',
+                              style: const TextStyle(
+                                fontSize: 12,
+                                color: Color(0xFF8C6A30),
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
                 ],
               ),
             ),
@@ -394,7 +432,7 @@ class _ExpenseItem {
     return _ExpenseItem(
       title: json['title'] as String? ?? 'Expense',
       category: json['category'] as String? ?? 'General',
-      amount: (json['amount'] as num?)?.toDouble() ?? 0.0,
+      amount: double.tryParse(json['amount'].toString()) ?? 0.0,
       isIncome: (json['type'] as String?)?.toLowerCase() == 'income',
     );
   }

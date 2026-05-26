@@ -14,7 +14,6 @@ class _SpendingCategoryScreenState extends State<SpendingCategoryScreen> {
 
   @override
   Widget build(BuildContext context) {
-    const brandColor = Color(0xFF8C6AE6);
     const surfaceColor = Color(0xFFF6F3FB);
     const mutedText = Color(0xFF7E7A8E);
 
